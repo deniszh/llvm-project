@@ -215,6 +215,87 @@ $ merge-fdata *.fdata > combined.fdata
 Use `combined.fdata` for **Step 3** above to generate a universally optimized
 binary.
 
+## Golang usage
+
+This section copied from [original patch](https://reviews.llvm.org/D124347)
+
+This patch adds golang binaries support built with original golang
+compiler (gc). The golang support requers 3 separate optimization
+passes:
+
+* golang-preprocess: This pass must be executed before any changes were perfomed in BinaryFunctions. Its main purpose is to parse the initial
+metadata for golang functions.
+
+* golang-postprocess: This pass must be executed after all optimizations were performed (except for the LongJmp) pass. Its main purpose is too
+adjust the code to sync it with functions metadata.
+
+* golang: This pass must be executed after all code changes were performed, no code changes are allowed by this pass or after it. This
+pass only changes golang-specific data sections that contains functions
+metadata.
+
+### Golang compiler patches
+
+Aarch64 support needs mapping symbols patch support, the PR was created
+here: 
+https://go-review.googlesource.com/c/go/+/343150. 
+
+The patches for
+the gc supported versions might be found here:
+https://github.com/yota9/golang_aarch64_mapping_symbols. 
+
+Apply the
+patch for your gc version and rebuilt the compiler.
+
+### Golang binaries compilation:
+
+The golang default linker does not support emit-relocs option, the
+external linker must be used for that purpose. The compilation command
+examples:
+
+* x86_64 (pie): 
+```
+go build -a -buildmode=pie -ldflags='-linkmode=external -extld=gcc -extldflags "-fuse-ld=gold -fPIE -pie -Wl,--threads -Wl,--emit-relocs -Wl,--compress-debug-sections=none
+```
+
+* x86_64 (no-pie):
+
+```
+go build -a -buildmode=exe -ldflags='-linkmode=external -extld=gcc -extldflags "-fuse-ld=gold -no-pie -Wl,--threads -Wl,--emit-relocs -Wl,--compress-debug-sections=none
+```
+
+* aarch64 (non-pie)
+
+```
+go build -a -ldflags='-linkmode=external -extld=gcc -extldflags "-no-pie -Wl,--emit-relocs -Wl,--compress-debug-sections=none
+```
+
+NOTE: The aarch64 ld and gold linkers currently has some bugs related to PIE binaries. The ld emits wrong addresses in data sections, which does not affect runtime due to dynamic relocations, but affects our binary data extractions. The gold linker emits static relocations on the wrong offsets.
+
+### Restrictions:
+
+The golang support is tightly connected to the gc version, so we only can optimize supported by BOLT gc versions compiled binaries.
+
+The inlining, frame optimization, split functions, lite mode optimizations are unsupported.
+
+### Results:
+Up to 19% of performance improvements were received on internal services.
+NOTE: Golang binaries are compatible with instrumentation!
+
+### Testing:
+TBD, probably a few binaries would be add in bolt-tests repo for both
+x86 and aarch64 platforms.
+
+Golang fixes related to support:
+* https://go-review.googlesource.com/c/go/+/396797
+* https://go-review.googlesource.com/c/go/+/380894
+* https://go-review.googlesource.com/c/go/+/334789
+
+AArch64 gold linker veneer fix:
+* https://sourceware.org/git/?p=binutils-gdb.git;a=commitdiff;h=cde010e1a866e67b7e895cbcb95dedd3de0a1e56;hp=a686428a8bb4cc6a32a976e36f1ec59aa5a9f58e
+
+Vladislav Khmelevsky,
+Advanced Software Technology Lab, Huawei (@[yota9](https://github.com/yota9))
+
 ## License
 
 BOLT is licensed under the [Apache License v2.0 with LLVM Exceptions](./LICENSE.TXT).
