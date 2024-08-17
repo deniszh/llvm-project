@@ -19,4 +19,4 @@ D: DWARF support
 
 N: Vladislav Khmelevsky
 E: och95@yandex.ru
-D: AArch64 backend
+D: AArch64 backend, Golang support

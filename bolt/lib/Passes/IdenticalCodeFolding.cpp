@@ -12,6 +12,8 @@
 
 #include "bolt/Passes/IdenticalCodeFolding.h"
 #include "bolt/Core/ParallelUtilities.h"
+#include "bolt/Passes/Golang.h"
+#include "bolt/Utils/CommandLineOpts.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ThreadPool.h"
@@ -139,6 +141,10 @@ bool isInstrEquivalentWith(const MCInst &InstA, const BinaryBasicBlock &BBA,
     }
   }
 
+  if (opts::GolangPass != opts::GV_NONE &&
+      !BC.MIB->areAnnotationsEqual(InstA, InstB, /*GenericOnly*/ true))
+    return false;
+
   return BC.MIB->equals(InstA, InstB, Comp);
 }
 
@@ -166,6 +172,23 @@ bool isIdenticalWith(const BinaryFunction &A, const BinaryFunction &B,
 
   if (A.hasIslandsInfo() || B.hasIslandsInfo())
     return false;
+
+  if (opts::GolangPass != opts::GV_NONE) {
+    std::unique_ptr<struct GoFunc> GoFuncA = createGoFunc();
+    std::unique_ptr<struct GoFunc> GoFuncB = createGoFunc();
+    GoFuncA->read(A);
+    GoFuncB->read(B);
+
+    if (GoFuncA->getNpcdata() != GoFuncB->getNpcdata())
+      return false;
+
+    if (GoFuncA->getNfuncdata() != GoFuncB->getNfuncdata())
+      return false;
+
+    for (unsigned I = 0; I < GoFuncA->getNfuncdata(); ++I)
+      if (GoFuncA->getFuncdata(I) != GoFuncB->getFuncdata(I))
+        return false;
+  }
 
   // Process both functions in either DFS or existing order.
   SmallVector<const BinaryBasicBlock *, 0> OrderA;
@@ -410,6 +433,25 @@ std::string hashInstOperand(BinaryContext &BC, const MCOperand &Operand) {
 namespace llvm {
 namespace bolt {
 
+bool IdenticalCodeFolding::shouldOptimizeICF(const BinaryFunction &BF) const {
+  if (BF.hasUnknownControlFlow())
+    return false;
+  if (BF.isFolded())
+    return false;
+  if (BF.hasSDTMarker())
+    return false;
+
+  if (opts::GolangPass != opts::GV_NONE) {
+    if (!BF.isGolang())
+      return false;
+
+    if (BF.getIndex() == GO_FIRST_BF_INDEX || BF.getIndex() == GO_LAST_BF_INDEX)
+      return false;
+  }
+
+  return BinaryFunctionPass::shouldOptimize(BF);
+}
+
 void IdenticalCodeFolding::runOnFunctions(BinaryContext &BC) {
   const size_t OriginalFunctionCount = BC.getBinaryFunctions().size();
   uint64_t NumFunctionsFolded = 0;
@@ -451,7 +493,7 @@ void IdenticalCodeFolding::runOnFunctions(BinaryContext &BC) {
                                            "ICF breakdown", opts::TimeICF);
     for (auto &BFI : BC.getBinaryFunctions()) {
       BinaryFunction &BF = BFI.second;
-      if (!this->shouldOptimize(BF))
+      if (!shouldOptimizeICF(BF))
         continue;
       CongruentBuckets[&BF].emplace(&BF);
     }

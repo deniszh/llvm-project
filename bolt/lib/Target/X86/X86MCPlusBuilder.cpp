@@ -61,6 +61,21 @@ unsigned getShortBranchOpcode(unsigned Opcode) {
   }
 }
 
+unsigned getLongBranchOpcode(unsigned Opcode) {
+  switch (Opcode) {
+  default:
+    return Opcode;
+  case X86::JMP_1:
+    return X86::JMP_4;
+  case X86::JMP_2:
+    return X86::JMP_4;
+  case X86::JCC_1:
+    return X86::JCC_4;
+  case X86::JCC_2:
+    return X86::JCC_4;
+  }
+}
+
 unsigned getShortArithOpcode(unsigned Opcode) {
   return X86::getShortOpcodeArith(Opcode);
 }
@@ -1253,6 +1268,42 @@ public:
     }
   }
 
+  int getStackAdjustment(const MCInst &Inst) const override {
+    int Ret;
+
+    if ((Ret = getPushSize(Inst))) {
+      return Ret;
+    } else if ((Ret = getPopSize(Inst))) {
+      return -Ret;
+    }
+
+    const int ValOp = 2;
+    int Sign = 1;
+
+    switch (Inst.getOpcode()) {
+    default:
+      return 0;
+    case X86::SUB64ri32:
+    case X86::SUB64ri8:
+      break;
+    case X86::ADD64ri32:
+    case X86::ADD64ri8:
+      Sign = -1;
+      break;
+    }
+
+    const MCInstrDesc &MCII = Info->get(Inst.getOpcode());
+    for (int I = 0, E = MCII.getNumDefs(); I != E; ++I) {
+      const MCOperand &Operand = Inst.getOperand(I);
+      if (Operand.isReg() && Operand.getReg() == X86::RSP) {
+        assert(Inst.getOperand(ValOp).isImm() && "unexpected operand");
+        return (int)Inst.getOperand(ValOp).getImm() * Sign;
+      }
+    }
+
+    return 0;
+  }
+
   bool isStackAdjustment(const MCInst &Inst) const override {
     switch (Inst.getOpcode()) {
     default:
@@ -1847,6 +1898,8 @@ public:
         if (int64_t(Imm) == int64_t(int32_t(Imm)))
           NewOpcode = X86::MOV64ri32;
       }
+    } else if (isNoop(Inst) && hasAnnotation(Inst, "NOP")) {
+      NewOpcode = X86::NOOP;
     } else {
       // If it's arithmetic instruction check if signed operand fits in 1 byte.
       const unsigned ShortOpcode = getShortArithOpcode(OldOpcode);
@@ -1930,6 +1983,21 @@ public:
     return true;
   }
 
+  bool relaxInstruction(MCInst &Inst) const override {
+    unsigned OldOpcode = Inst.getOpcode();
+    unsigned NewOpcode = OldOpcode;
+
+    if (isBranch(Inst) || isTailCall(Inst)) {
+      NewOpcode = getLongBranchOpcode(OldOpcode);
+    }
+
+    if (NewOpcode == OldOpcode)
+      return false;
+
+    Inst.setOpcode(NewOpcode);
+    return true;
+  }
+
   bool lowerTailCall(MCInst &Inst) override {
     if (Inst.getOpcode() == X86::JMP_4 && isTailCall(Inst)) {
       Inst.setOpcode(X86::JMP_1);
@@ -1972,7 +2040,7 @@ public:
       --I;
 
       // Ignore nops and CFIs
-      if (isPseudo(*I))
+      if (isPseudo(*I) || isNoop(*I))
         continue;
 
       // Stop when we find the first non-terminator
@@ -2520,6 +2588,7 @@ public:
   }
 
   bool createNoop(MCInst &Inst) const override {
+    Inst.clear();
     Inst.setOpcode(X86::NOOP);
     return true;
   }
@@ -2912,12 +2981,43 @@ public:
     return true;
   }
 
+  int getUncondBranchEncodingSize() const override { return 8; }
+
   bool createCall(MCInst &Inst, const MCSymbol *Target,
                   MCContext *Ctx) override {
     Inst.setOpcode(X86::CALL64pcrel32);
     Inst.addOperand(MCOperand::createExpr(
         MCSymbolRefExpr::create(Target, MCSymbolRefExpr::VK_None, *Ctx)));
     return true;
+  }
+
+  int getShortJmpEncodingSize() const override { return 8; }
+
+  int getPCRelEncodingSize(const MCInst &Inst) const override {
+    switch (Inst.getOpcode()) {
+    default:
+      llvm_unreachable("Failed to get pcrel encoding size");
+      return 0;
+    case X86::JMP_1:
+    case X86::JCC_1:
+      return 8;
+    case X86::JMP_2:
+    case X86::JCC_2:
+    case X86::JMP16m:
+    case X86::JMP16r:
+      return 16;
+    case X86::JMP_4:
+    case X86::JCC_4:
+    case X86::JMP32m:
+    case X86::JMP32r:
+    case X86::CALL64pcrel32:
+      return 32;
+    case X86::JMP64m:
+    case X86::JMP64r:
+    case X86::CALL64m:
+    case X86::CALL64r:
+      return 64;
+    }
   }
 
   bool createTailCall(MCInst &Inst, const MCSymbol *Target,
@@ -3238,6 +3338,32 @@ public:
     Inst.addOperand(MCOperand::createReg(X86::NoRegister)); // IndexReg
     Inst.addOperand(MCOperand::createImm(Disp));            // Displacement
     Inst.addOperand(MCOperand::createReg(X86::NoRegister)); // AddrSegmentReg
+  }
+
+  bool createIndirectCall(MCInst &Inst, const MCSymbol *TargetLocation,
+                          MCContext *Ctx, bool IsTailCall) {
+    Inst.setOpcode(IsTailCall ? X86::JMP32m : X86::CALL64m);
+    Inst.addOperand(MCOperand::createReg(X86::RIP));        // BaseReg
+    Inst.addOperand(MCOperand::createImm(1));               // ScaleAmt
+    Inst.addOperand(MCOperand::createReg(X86::NoRegister)); // IndexReg
+    Inst.addOperand(MCOperand::createExpr(                  // Displacement
+        MCSymbolRefExpr::create(TargetLocation, MCSymbolRefExpr::VK_None,
+                                *Ctx)));
+    Inst.addOperand(MCOperand::createReg(X86::NoRegister)); // AddrSegmentReg
+    if (IsTailCall)
+      setTailCall(Inst);
+    return true;
+  }
+
+  InstructionListType createInstrumentFiniCall(MCSymbol *HandlerFuncAddr,
+                                               MCContext *Ctx,
+                                               bool IsTailCall) override {
+    // NOTE: We don't have to check HandlerFuncAddr content for 0 before call
+    // at runtime since Golang does't call any constructors
+    std::vector<MCInst> Insts(1);
+    createIndirectCall(Insts[0], HandlerFuncAddr, Ctx, IsTailCall);
+    addAnnotation(Insts[0], "IsInstrumentation", true);
+    return Insts;
   }
 
   InstructionListType createInstrumentedIndirectCall(const MCInst &CallInst,

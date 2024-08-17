@@ -16,8 +16,10 @@
 #include "bolt/Core/MCPlusBuilder.h"
 #include "bolt/Core/ParallelUtilities.h"
 #include "bolt/Core/Relocation.h"
+#include "bolt/Passes/BinaryPasses.h"
 #include "bolt/Passes/CacheMetrics.h"
 #include "bolt/Passes/ReorderFunctions.h"
+#include "bolt/Passes/SplitFunctions.h"
 #include "bolt/Profile/BoltAddressTranslation.h"
 #include "bolt/Profile/DataAggregator.h"
 #include "bolt/Profile/DataReader.h"
@@ -81,6 +83,15 @@ extern cl::opt<JumpTableSupportLevel> JumpTables;
 extern cl::list<std::string> ReorderData;
 extern cl::opt<bolt::ReorderFunctions::ReorderType> ReorderFunctions;
 extern cl::opt<bool> TimeBuild;
+extern cl::opt<bool> PreserveBlocksAlignment;
+extern cl::opt<bool> AlignBlocks;
+extern cl::opt<bool> NoInline;
+extern cl::opt<bool> StringOps;
+extern cl::opt<FrameOptimizationType> FrameOptimization;
+extern cl::opt<bool> SplitFunctions;
+extern llvm::cl::opt<bool> InsertRetpolines;
+extern cl::opt<bool> InstructionsLowering;
+extern cl::list<Peepholes::PeepholeOpts> Peepholes;
 
 static cl::opt<bool> ForceToDataRelocations(
     "force-data-relocations",
@@ -1778,6 +1789,59 @@ void RewriteInstance::adjustCommandLineOptions() {
     opts::HotTextMoveSections.addValue(".never_hugify");
   }
 
+  if ((BC->isAArch64() || opts::GolangPass != opts::GV_NONE) &&
+      (opts::AlignBlocks || opts::PreserveBlocksAlignment)) {
+    errs() << "BOLT-WARNING: Disabling block alignment\n";
+    opts::AlignBlocks = false;
+    opts::PreserveBlocksAlignment = false;
+  }
+
+  if (opts::GolangPass != opts::GV_NONE) {
+    // Golang does not support inlining
+    opts::NoInline = true;
+    opts::StringOps = false;
+
+    // Instructions should not be lowered for golang
+    opts::InstructionsLowering = false;
+
+    // Enable double jump elimination. Currently golang uses them heavely and
+    // this option is needed for preserving pcsp tables values correctly.
+    opts::Peepholes.push_back(Peepholes::PEEP_DOUBLE_JUMPS);
+
+    if (opts::FrameOptimization != FOP_NONE) {
+      errs() << "BOLT-WARNING: Golang does not support frame optimizations\n";
+      opts::FrameOptimization = FOP_NONE;
+    }
+
+    if (opts::SplitFunctions) {
+      errs() << "BOLT-WARNING: Golang does not support function splitting\n";
+      opts::SplitFunctions = false;
+    }
+
+    if (opts::UseOldText) {
+      errs() << "BOLT-WARNING: Cannot combine -use-old-text and -golang\n";
+      opts::UseOldText = false;
+    }
+
+    if (opts::Lite) {
+      errs() << "BOLT-WARNING: Lite mode is not compatible with -golang. "
+                "Disabling.\n";
+      opts::Lite = false;
+    }
+
+    if (opts::HotFunctionsAtEnd) {
+      errs() << "BOLT-WARNING: Golang does not support hot functions at end. "
+                "Disabling.\n";
+      opts::HotFunctionsAtEnd = false;
+    }
+
+    if (opts::InsertRetpolines) {
+      errs() << "BOLT-WARNING: Retpoline pass is not compatible with -golang. "
+                "Disabling.\n";
+      opts::InsertRetpolines = false;
+    }
+  }
+
   if (opts::UseOldText && !BC->OldTextSectionAddress) {
     errs() << "BOLT-WARNING: cannot use old .text as the section was not found"
               "\n";
@@ -1795,7 +1859,7 @@ void RewriteInstance::adjustCommandLineOptions() {
     opts::AlignText = (unsigned)opts::AlignFunctions;
 
   if (BC->isX86() && opts::Lite.getNumOccurrences() == 0 && !opts::StrictMode &&
-      !opts::UseOldText)
+      !opts::UseOldText && opts::GolangPass == opts::GV_NONE)
     opts::Lite = true;
 
   if (opts::Lite && opts::UseOldText) {
@@ -2930,6 +2994,10 @@ void RewriteInstance::processProfileData() {
 void RewriteInstance::disassembleFunctions() {
   NamedRegionTimer T("disassembleFunctions", "disassemble functions",
                      TimerGroupName, TimerGroupDesc, opts::TimeRewrite);
+  // Create annotation indices to allow lock-free execution
+  BC->MIB->getOrCreateAnnotationIndex("Size");
+  BC->MIB->getOrCreateAnnotationIndex("Locked");
+
   for (auto &BFI : BC->getBinaryFunctions()) {
     BinaryFunction &Function = BFI.second;
 
@@ -3997,6 +4065,7 @@ void RewriteInstance::patchELFPHDRTable() {
 
   // Write/re-write program headers.
   Phnum = Obj.getHeader().e_phnum;
+
   if (PHDRTableOffset) {
     // Writing new pheader table.
     Phnum += 1; // only adding one new segment
@@ -4069,6 +4138,7 @@ void RewriteInstance::patchELFPHDRTable() {
                sizeof(NewTextPhdr));
       AddedSegment = true;
     }
+
     OS.write(reinterpret_cast<const char *>(&NewPhdr), sizeof(NewPhdr));
   }
 
@@ -4757,9 +4827,10 @@ void RewriteInstance::updateELFSymbolTable(
             Function->getCodeSection(FF->getFragmentNum())->getIndex();
       } else {
         // Check if the symbol belongs to moved data object and update it.
-        BinaryData *BD = opts::ReorderData.empty()
-                             ? nullptr
-                             : BC->getBinaryDataAtAddress(Symbol.st_value);
+        BinaryData *BD =
+            opts::ForceToDataRelocations || !opts::ReorderData.empty()
+                ? BC->getBinaryDataAtAddress(Symbol.st_value)
+                : nullptr;
         if (BD && BD->isMoved() && !BD->isJumpTable()) {
           assert((!BD->getSize() || !Symbol.st_size ||
                   Symbol.st_size == BD->getSize()) &&
@@ -4774,6 +4845,7 @@ void RewriteInstance::updateELFSymbolTable(
                      << " (" << OutputSection.getIndex() << ")\n");
           NewSymbol.st_shndx = OutputSection.getIndex();
           NewSymbol.st_value = BD->getOutputAddress();
+          NewSymbol.st_size = BD->getOutputSize();
         } else {
           // Otherwise just update the section for the symbol.
           if (Symbol.st_shndx < ELF::SHN_LORESERVE)
@@ -4898,6 +4970,24 @@ void RewriteInstance::updateELFSymbolTable(
   if (opts::HotData && !NumHotDataSymsUpdated) {
     addSymbol("__hot_data_start");
     addSymbol("__hot_data_end");
+  }
+
+  auto addSectionSymbol = [&](uint64_t Address, unsigned Index) {
+    ELFSymTy Symbol;
+    Symbol.st_value = Address;
+    Symbol.st_shndx = Index;
+    Symbol.st_name = AddToStrTab("");
+    Symbol.st_size = 0;
+    Symbol.st_other = 0;
+    Symbol.setBindingAndType(ELF::STB_LOCAL, ELF::STT_SECTION);
+    Symbols.emplace_back(Symbol);
+  };
+
+  for (BinarySection &Section : BC->allocatableSections()) {
+    if (Section.hasSectionRef())
+      continue;
+
+    addSectionSymbol(Section.getOutputAddress(), Section.getIndex());
   }
 
   // Put local symbols at the beginning.
@@ -5064,8 +5154,15 @@ RewriteInstance::patchELFAllocatableRelaSections(ELFObjectFile<ELFT> *File) {
         uint32_t SymbolIdx = 0;
         uint64_t Addend = Rel.Addend;
 
-        if (Rel.Symbol) {
-          SymbolIdx = getOutputDynamicSymbolIndex(Symbol);
+        if (Symbol) {
+          if (!IsRelative && !Rel.isIRelative()) {
+            SymbolIdx = getOutputDynamicSymbolIndex(Symbol);
+          } else {
+            // The R_*_(I)RELATIVE relocation inserted by BOLT
+            ErrorOr<uint64_t> Address = BC->getSymbolValue(*Symbol);
+            if (Address)
+              Addend += getNewFunctionOrDataAddress(*Address);
+          }
         } else {
           // Usually this case is used for R_*_(I)RELATIVE relocations
           const uint64_t Address = getNewFunctionOrDataAddress(Addend);

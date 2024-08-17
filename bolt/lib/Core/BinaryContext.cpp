@@ -2380,5 +2380,18 @@ DebugAddressRangesVector BinaryContext::translateModuleAddressRanges(
   return OutputRanges;
 }
 
+std::pair<unsigned, unsigned>
+BinaryContext::getBFAlignment(BinaryFunction &Function,
+                              bool EmitColdPart) const {
+  unsigned Alignment = Function.getAlignment();
+  if (HasRelocations) {
+    unsigned MaxAlignBytes = EmitColdPart ? Function.getMaxColdAlignmentBytes()
+                                          : Function.getMaxAlignmentBytes();
+    return std::make_pair(Alignment, MaxAlignBytes);
+  }
+
+  return std::make_pair(Alignment, Alignment);
+}
+
 } // namespace bolt
 } // namespace llvm

@@ -191,6 +191,21 @@ cl::opt<unsigned>
               cl::init(0), cl::ZeroOrMore, cl::cat(BoltCategory),
               cl::sub(cl::SubCommand::getAll()));
 
+cl::opt<opts::GolangVersion> GolangPass(
+    "golang",
+    cl::desc("Use for input binary generated with golang gc compiler"),
+    cl::init(opts::GV_NONE),
+    cl::values(
+        clEnumValN(opts::GV_NONE, "0", "do not use golang optimizations"),
+        clEnumValN(opts::GV_AUTO, "1", "auto detect golang version"),
+        clEnumValN(opts::GV_1_14_9, "1.14.9", "set gc version to 1.14.9"),
+        clEnumValN(opts::GV_1_14_12, "1.14.12", "set gc version to 1.14.12"),
+        clEnumValN(opts::GV_1_16_5, "1.16.5", "set gc version to 1.16.5"),
+        clEnumValN(opts::GV_1_17_2, "1.17.2", "set gc version to 1.17.2"),
+        clEnumValN(opts::GV_1_17_5, "1.17.5", "set gc version to 1.17.5"),
+        clEnumValN(opts::GV_1_17_8, "1.17.8", "set gc version to 1.17.8")),
+    cl::Optional, cl::cat(BoltOptCategory));
+
 bool processAllFunctions() {
   if (opts::AggregateOnly)
     return false;

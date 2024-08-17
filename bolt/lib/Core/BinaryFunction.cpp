@@ -15,6 +15,7 @@
 #include "bolt/Core/BinaryDomTree.h"
 #include "bolt/Core/DynoStats.h"
 #include "bolt/Core/MCPlusBuilder.h"
+#include "bolt/Passes/Golang.h"
 #include "bolt/Utils/NameResolver.h"
 #include "bolt/Utils/NameShortener.h"
 #include "bolt/Utils/Utils.h"
@@ -305,6 +306,14 @@ void BinaryFunction::markUnreachableBlocks() {
     // support removing unused jump tables yet (GH-issue20).
     for (const MCInst &Inst : *BB) {
       if (BC.MIB->getJumpTable(Inst)) {
+        Stack.push(BB);
+        BB->markValid(true);
+        break;
+      }
+
+      // NOTE GO: Deferreturn calls are located in unreachable regions
+      if (opts::GolangPass != opts::GV_NONE && BC.MIB->isCall(Inst) &&
+          BC.MIB->hasAnnotation(Inst, "IsDefer")) {
         Stack.push(BB);
         BB->markValid(true);
         break;
@@ -1188,14 +1197,7 @@ bool BinaryFunction::disassemble() {
       continue;
     }
 
-    if (!BC.SymbolicDisAsm->getInstruction(Instruction, Size,
-                                           FunctionData.slice(Offset),
-                                           AbsoluteInstrAddr, nulls())) {
-      // Functions with "soft" boundaries, e.g. coming from assembly source,
-      // can have 0-byte padding at the end.
-      if (isZeroPaddingAt(Offset))
-        break;
-
+    auto disasmFailed = [&]() {
       errs() << "BOLT-WARNING: unable to disassemble instruction at offset 0x"
              << Twine::utohexstr(Offset) << " (address 0x"
              << Twine::utohexstr(AbsoluteInstrAddr) << ") in function " << *this
@@ -1207,8 +1209,35 @@ bool BinaryFunction::disassemble() {
       } else {
         setIgnored();
       }
+    };
 
-      break;
+    if (!BC.SymbolicDisAsm->getInstruction(Instruction, Size,
+                                           FunctionData.slice(Offset),
+                                           AbsoluteInstrAddr, nulls())) {
+      if (opts::GolangPass != opts::GV_NONE && BC.isAArch64()) {
+        // Golang uses special UND instruction for aarch64, handle it as NOP
+        // Also skipPleaseUseCallersFrames is full of 0, replace them with NOPs
+        DataExtractor DE =
+            DataExtractor(FunctionData, BC.AsmInfo->isLittleEndian(),
+                          BC.AsmInfo->getCodePointerSize());
+        uint64_t ValOffset = Offset;
+        uint32_t Value = DE.getU32(&ValOffset);
+        if (Value && Value != GolangPass::getUndAarch64()) {
+          disasmFailed();
+          errs() << "BOLT-INFO: Check that the binary was compiled with "
+                 << "-mappingsymbol option\n";
+          exit(1);
+        }
+
+        BC.MIB->createNoop(Instruction);
+      } else if (isZeroPaddingAt(Offset)) {
+        // Functions with "soft" boundaries, e.g. coming from assembly source,
+        // can have 0-byte padding at the end.
+        break;
+      } else {
+        disasmFailed();
+        break;
+      }
     }
 
     // Check integrity of LLVM assembler/disassembler.
@@ -2025,7 +2054,7 @@ bool BinaryFunction::buildCFG(MCPlusBuilder::AllocatorIdTy AllocatorId) {
         MIB->setOffset(Instr, static_cast<uint32_t>(Offset), AllocatorId);
       if (IsSDTMarker || IsLKMarker)
         HasSDTMarker = true;
-      else
+      else if (!PreserveNops)
         // Annotate ordinary nops, so we can safely delete them if required.
         MIB->addAnnotation(Instr, "NOP", static_cast<uint32_t>(1), AllocatorId);
     }
@@ -2221,7 +2250,8 @@ void BinaryFunction::postProcessCFG() {
   // Remove "Offset" annotations, unless we need an address-translation table
   // later. This has no cost, since annotations are allocated by a bumpptr
   // allocator and won't be released anyway until late in the pipeline.
-  if (!requiresAddressTranslation() && !opts::Instrument) {
+  if (!requiresAddressTranslation() && !opts::Instrument &&
+      opts::GolangPass == opts::GV_NONE) {
     for (BinaryBasicBlock &BB : blocks())
       for (MCInst &Inst : BB)
         BC.MIB->clearOffset(Inst);

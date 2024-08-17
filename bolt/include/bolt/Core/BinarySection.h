@@ -27,6 +27,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <shared_mutex>
 
 namespace llvm {
 class MCStreamer;
@@ -340,6 +341,9 @@ public:
   /// Does this section have any pending relocations?
   bool hasPendingRelocations() const { return !PendingRelocations.empty(); }
 
+  /// Does this section have any dynamic relocations?
+  bool hasDynamicRelocations() const { return !DynamicRelocations.empty(); }
+
   /// Remove non-pending relocation with the given /p Offset.
   bool removeRelocationAt(uint64_t Offset) {
     auto Itr = Relocations.find(Offset);
@@ -347,6 +351,19 @@ public:
       Relocations.erase(Itr);
       return true;
     }
+
+    return false;
+  }
+
+  /// Remove the dynamic relocation (if any) at the given /p Offset.
+  bool removeDynamicRelocationAt(uint64_t Offset) {
+    Relocation Key{Offset, 0, 0, 0, 0};
+    auto Itr = DynamicRelocations.find(Key);
+    if (Itr != DynamicRelocations.end()) {
+      DynamicRelocations.erase(Itr);
+      return true;
+    }
+
     return false;
   }
 
@@ -354,7 +371,7 @@ public:
 
   /// Add a new relocation at the given /p Offset.
   void addRelocation(uint64_t Offset, MCSymbol *Symbol, uint64_t Type,
-                     uint64_t Addend, uint64_t Value = 0,
+                     uint64_t Addend = 0, uint64_t Value = 0,
                      bool Pending = false) {
     assert(Offset < getSize() && "offset not within section bounds");
     if (!Pending) {
@@ -367,7 +384,7 @@ public:
 
   /// Add a dynamic relocation at the given /p Offset.
   void addDynamicRelocation(uint64_t Offset, MCSymbol *Symbol, uint64_t Type,
-                            uint64_t Addend, uint64_t Value = 0) {
+                            uint64_t Addend = 0, uint64_t Value = 0) {
     assert(Offset < getSize() && "offset not within section bounds");
     DynamicRelocations.emplace(Relocation{Offset, Symbol, Type, Addend, Value});
   }
@@ -396,7 +413,7 @@ public:
     return Itr != Relocations.end() ? &*Itr : nullptr;
   }
 
-  /// Lookup the relocation (if any) at the given /p Offset.
+  /// Lookup the dynamic relocation (if any) at the given /p Offset.
   const Relocation *getDynamicRelocationAt(uint64_t Offset) const {
     Relocation Key{Offset, 0, 0, 0, 0};
     auto Itr = DynamicRelocations.find(Key);

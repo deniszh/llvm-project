@@ -61,6 +61,21 @@ extern llvm::cl::opt<bool> TimeOpts;
 extern llvm::cl::opt<bool> UseOldText;
 extern llvm::cl::opt<bool> UpdateDebugSections;
 
+enum GolangVersion : char {
+  GV_NONE = 0, /// Do not use golang passes
+  GV_FIRST,
+  GV_AUTO = GV_FIRST, /// Auto delect golang version
+  GV_1_14_9,          /// Version 1.14.9
+  GV_1_14_12,         /// Version 1.14.12
+  GV_1_16_5,          /// Version 1.16.5
+  GV_1_17_2,          /// Version 1.17.2
+  GV_1_17_5,          /// Version 1.17.5
+  GV_1_17_8,          /// Version 1.17.8
+  GV_LAST,
+  GV_LATEST = GV_LAST - 1 /// Go latest version
+};
+
+extern llvm::cl::opt<GolangVersion> GolangPass;
 // The default verbosity level (0) is pretty terse, level 1 is fairly
 // verbose and usually prints some informational message for every
 // function processed.  Level 2 is for the noisiest of messages and

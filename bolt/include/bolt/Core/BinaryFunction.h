@@ -75,6 +75,14 @@ enum IndirectCallPromotionType : char {
   ICP_ALL          /// Perform ICP on calls and jump tables.
 };
 
+enum IndexOrder {
+  GO_FIRST_BF_INDEX = 0,
+  FIRST_BF_INDEX = 1,
+  GO_UNUSED_BF_INDEX = -3U,
+  GO_LAST_BF_INDEX = -2U,
+  INVALID_BF_INDEX = -1U,
+};
+
 /// Information on a single indirect call to a particular callee.
 struct IndirectCallProfile {
   MCSymbol *Symbol;
@@ -208,6 +216,9 @@ public:
   using cfi_iterator = CFIInstrMapType::iterator;
   using const_cfi_iterator = CFIInstrMapType::const_iterator;
 
+  // If function is golang stores the offset to functab entry
+  uint32_t GolangFunctabOffset = 0;
+
 private:
   /// Current state of the function.
   State CurrentState{State::Empty};
@@ -243,7 +254,7 @@ private:
   uint64_t MaxSize{std::numeric_limits<uint64_t>::max()};
 
   /// Alignment requirements for the function.
-  uint16_t Alignment{2};
+  uint16_t Alignment{MinAlign};
 
   /// Maximum number of bytes used for alignment of hot part of the function.
   uint16_t MaxAlignmentBytes{0};
@@ -349,6 +360,9 @@ private:
   /// This attribute is only valid when hasCFG() == true.
   bool HasCanonicalCFG{true};
 
+  /// True if we have a suspicion that the function was written in ASM
+  bool IsAsm{false};
+
   /// Name for the section this function code should reside in.
   std::string CodeSectionName;
 
@@ -404,7 +418,7 @@ private:
   const MCSymbol *PLTSymbol{nullptr};
 
   /// Function order for streaming into the destination binary.
-  uint32_t Index{-1U};
+  uint32_t Index{INVALID_BF_INDEX};
 
   /// Get basic block index assuming it belongs to this function.
   unsigned getIndex(const BinaryBasicBlock *BB) const {
@@ -1046,15 +1060,14 @@ public:
 
   uint64_t getOutputSize() const { return OutputSize; }
 
-  /// Does this function have a valid streaming order index?
-  bool hasValidIndex() const { return Index != -1U; }
+  /// Returns true if this function has a valid streaming order index
+  bool hasValidIndex() const { return Index != INVALID_BF_INDEX; }
 
   /// Get the streaming order index for this function.
   uint32_t getIndex() const { return Index; }
 
   /// Set the streaming order index for this function.
   void setIndex(uint32_t Idx) {
-    assert(!hasValidIndex());
     Index = Idx;
   }
 
@@ -1377,6 +1390,9 @@ public:
   /// Return true if all CFG edges have local successors.
   bool hasCanonicalCFG() const { return HasCanonicalCFG; }
 
+  /// Return true if we have a suspicion that the function was written in ASM
+  bool isAsm() const { return IsAsm; }
+
   /// Return true if the original function code has all necessary relocations
   /// to track addresses of functions emitted to new locations.
   bool hasExternalRefRelocations() const { return HasExternalRefRelocations; }
@@ -1406,6 +1422,15 @@ public:
 
   /// Return true if the body of the function was merged into another function.
   bool isFolded() const { return FoldedIntoFunction != nullptr; }
+
+  /// Sets golang funtab offset for this function
+  void setGolangFunctabOffset(uint32_t Offset) { GolangFunctabOffset = Offset; }
+
+  /// Return true if the function is presented in original go functab
+  bool isGolang() const { return GolangFunctabOffset != 0; }
+
+  /// Get golang funtab offset for this function
+  uint32_t getGolangFunctabOffset() const { return GolangFunctabOffset; }
 
   /// If this function was folded, return the function it was folded into.
   BinaryFunction *getFoldedIntoFunction() const { return FoldedIntoFunction; }
@@ -1767,6 +1792,8 @@ public:
   }
 
   void setHasCanonicalCFG(bool V) { HasCanonicalCFG = V; }
+
+  void setIsAsm(bool V) { IsAsm = V; }
 
   void setFolded(BinaryFunction *BF) { FoldedIntoFunction = BF; }
 
@@ -2293,14 +2320,14 @@ public:
     size_t Estimate = 0;
     for (const BinaryBasicBlock &BB : blocks())
       if (BB.isCold())
-        Estimate += BC.computeCodeSize(BB.begin(), BB.end());
+        Estimate += BB.estimateSize();
     return Estimate;
   }
 
   size_t estimateSize() const {
     size_t Estimate = 0;
     for (const BinaryBasicBlock &BB : blocks())
-      Estimate += BC.computeCodeSize(BB.begin(), BB.end());
+      Estimate += BB.estimateSize();
     return Estimate;
   }
 

@@ -57,7 +57,8 @@ void InstrumentationRuntimeLibrary::adjustCommandLineOptions(
               "the input binary\n";
     exit(1);
   }
-  if (!BC.FiniFunctionAddress && !BC.IsStaticExecutable) {
+  if (!BC.FiniFunctionAddress && !BC.IsStaticExecutable &&
+      opts::GolangPass == opts::GV_NONE) {
     errs() << "BOLT-ERROR: input binary lacks DT_FINI entry in the dynamic "
               "section but instrumentation currently relies on patching "
               "DT_FINI to write the profile\n";
@@ -180,6 +181,8 @@ void InstrumentationRuntimeLibrary::emitBinary(BinaryContext &BC,
   emitString("__bolt_instr_filename", opts::InstrumentationFilename);
   emitString("__bolt_instr_binpath", opts::InstrumentationBinpath);
   emitIntValue("__bolt_instr_use_pid", !!opts::InstrumentationFileAppendPID, 1);
+  emitValue(BC.Ctx->getOrCreateSymbol("__bolt_trampoline_instr_fini_call"),
+            nullptr);
 
   if (BC.isMachO()) {
     MCSection *TablesSection = BC.Ctx->getMachOSection(

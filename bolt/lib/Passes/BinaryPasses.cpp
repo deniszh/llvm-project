@@ -91,7 +91,7 @@ static cl::opt<bool> MinBranchClusters(
              "branches"),
     cl::Hidden, cl::cat(BoltOptCategory));
 
-static cl::list<Peepholes::PeepholeOpts> Peepholes(
+cl::list<Peepholes::PeepholeOpts> Peepholes(
     "peepholes", cl::CommaSeparated, cl::desc("enable peephole optimizations"),
     cl::value_desc("opt1,opt2,opt3,..."),
     cl::values(clEnumValN(Peepholes::PEEP_NONE, "none", "disable peepholes"),
@@ -1206,9 +1206,13 @@ void AssignSections::runOnFunctions(BinaryContext &BC) {
   if (!BC.HasRelocations)
     return;
 
-  const bool UseColdSection =
-      BC.NumProfiledFuncs > 0 ||
-      opts::ReorderFunctions == ReorderFunctions::RT_USER;
+  bool UseColdSection = BC.NumProfiledFuncs > 0 ||
+                        opts::ReorderFunctions == ReorderFunctions::RT_USER;
+
+  // With RT_NONE reordering we won't assign indexes for BF
+  if (opts::ReorderFunctions == ReorderFunctions::RT_NONE)
+    UseColdSection = false;
+
   for (auto &BFI : BC.getBinaryFunctions()) {
     BinaryFunction &Function = BFI.second;
     if (opts::isHotTextMover(Function)) {

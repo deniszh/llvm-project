@@ -14,6 +14,9 @@ add_llvm_library(LLVMBOLTPasses
   FrameAnalysis.cpp
   FrameOptimizer.cpp
   FixRelaxationPass.cpp
+  Golang.cpp
+  Golang-postprocess.cpp
+  Golang-preprocess.cpp
   HFSort.cpp
   HFSortPlus.cpp
   Hugify.cpp

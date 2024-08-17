@@ -188,7 +188,9 @@ namespace {
 BinaryBasicBlock::iterator insertInstructions(InstructionListType &Instrs,
                                               BinaryBasicBlock &BB,
                                               BinaryBasicBlock::iterator Iter) {
+  BinaryContext &BC = BB.getFunction()->getBinaryContext();
   for (MCInst &NewInst : Instrs) {
+    BC.MIB->getOrCreateAnnotationAs<bool>(NewInst, "IsInstrumentation") = true;
     Iter = BB.insertInstruction(Iter, NewInst);
     ++Iter;
   }
@@ -371,6 +373,14 @@ void Instrumentation::instrumentFunction(BinaryFunction &Function,
     }
   }
 
+  // If we have a suspicion that the function was written in ASM
+  // lets treat it as a leaf function since the code there might
+  // use stack lower than a function frame and we can wipe saved
+  // values on stack by instrumenting it
+  // TODO Track SP access by the function to determine such cases
+  if (Function.isAsm())
+    IsLeafFunction = true;
+
   for (auto BBI = Function.begin(), BBE = Function.end(); BBI != BBE; ++BBI) {
     BinaryBasicBlock &BB = *BBI;
     bool HasUnconditionalBranch = false;
@@ -513,6 +523,8 @@ void Instrumentation::instrumentFunction(BinaryFunction &Function,
 void Instrumentation::runOnFunctions(BinaryContext &BC) {
   if (!BC.isX86())
     return;
+
+  BC.MIB->getOrCreateAnnotationIndex("IsInstrumentation");
 
   const unsigned Flags = BinarySection::getFlags(/*IsReadOnly=*/false,
                                                  /*IsText=*/false,

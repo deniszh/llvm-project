@@ -33,7 +33,6 @@
 using namespace llvm;
 using namespace bolt;
 
-namespace {
 class DeprecatedSplitFunctionOptionParser : public cl::parser<bool> {
 public:
   explicit DeprecatedSplitFunctionOptionParser(cl::Option &O)
@@ -50,7 +49,6 @@ public:
     return cl::parser<bool>::parse(O, ArgName, Arg, Value);
   }
 };
-} // namespace
 
 namespace opts {
 
@@ -73,7 +71,7 @@ static cl::opt<unsigned> SplitAlignThreshold(
 
     cl::Hidden, cl::cat(BoltOptCategory));
 
-static cl::opt<bool, false, DeprecatedSplitFunctionOptionParser>
+cl::opt<bool, false, DeprecatedSplitFunctionOptionParser>
     SplitFunctions("split-functions",
                    cl::desc("split functions into fragments"),
                    cl::cat(BoltOptCategory));

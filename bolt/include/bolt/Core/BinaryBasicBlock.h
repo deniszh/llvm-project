@@ -707,9 +707,16 @@ public:
     return Instructions.erase(II);
   }
 
+  /// Store meta-data of instruction to NOP instruction
+  /// and insert it in place of erased one
+  bool storeInstructionMetadata(iterator II);
+
   /// Erase non-pseudo instruction at a given iterator \p II.
   /// Return iterator following the removed instruction.
   iterator eraseInstruction(iterator II) {
+    if (storeInstructionMetadata(II))
+      return std::next(II);
+
     adjustNumPseudos(*II, -1);
     return Instructions.erase(II);
   }
@@ -748,12 +755,9 @@ public:
   /// Return iterator pointing to the first inserted instruction.
   template <typename Itr>
   iterator replaceInstruction(iterator II, Itr Begin, Itr End) {
-    adjustNumPseudos(*II, -1);
+    II = eraseInstruction(II);
     adjustNumPseudos(Begin, End, 1);
-
-    auto I = II - Instructions.begin();
-    Instructions.insert(Instructions.erase(II), Begin, End);
-    return I + Instructions.begin();
+    return Instructions.insert(II, Begin, End);
   }
 
   iterator replaceInstruction(iterator II,
@@ -771,6 +775,14 @@ public:
   iterator insertInstruction(iterator At, MCInst &NewInst) {
     adjustNumPseudos(NewInst, 1);
     return Instructions.insert(At, NewInst);
+  }
+
+  iterator insertInstructions(iterator At, std::vector<MCInst> &Instrs) {
+    for (MCInst &NewInst : Instrs) {
+      At = insertInstruction(At, NewInst);
+      ++At;
+    }
+    return At;
   }
 
   /// Helper to retrieve any terminators in \p BB before \p Pos. This is used

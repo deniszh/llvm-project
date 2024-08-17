@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "bolt/Passes/ReorderFunctions.h"
+#include "bolt/Passes/Golang.h"
 #include "bolt/Passes/HFSort.h"
 #include "llvm/Support/CommandLine.h"
 #include <fstream>
@@ -18,6 +19,7 @@
 #define DEBUG_TYPE "hfsort"
 
 using namespace llvm;
+using namespace bolt;
 
 namespace opts {
 
@@ -117,7 +119,7 @@ void ReorderFunctions::reorder(std::vector<Cluster> &&Clusters,
                                std::map<uint64_t, BinaryFunction> &BFs) {
   std::vector<uint64_t> FuncAddr(Cg.numNodes()); // Just for computing stats
   uint64_t TotalSize = 0;
-  uint32_t Index = 0;
+  uint32_t Index = FIRST_BF_INDEX;
 
   // Set order of hot functions based on clusters.
   for (const Cluster &Cluster : Clusters) {
@@ -291,7 +293,7 @@ void ReorderFunctions::runOnFunctions(BinaryContext &BC) {
   case RT_EXEC_COUNT:
     {
       std::vector<BinaryFunction *> SortedFunctions(BFs.size());
-      uint32_t Index = 0;
+      uint32_t Index = FIRST_BF_INDEX;
       llvm::transform(BFs, SortedFunctions.begin(),
                       [](std::pair<const uint64_t, BinaryFunction> &BFI) {
                         return &BFI.second;
@@ -382,6 +384,27 @@ void ReorderFunctions::runOnFunctions(BinaryContext &BC) {
   }
 
   reorder(std::move(Clusters), BFs);
+
+  if (opts::GolangPass != opts::GV_NONE && opts::ReorderFunctions != RT_USER) {
+    // | 0: runtime.text                           |
+    // | sorted functions                          |
+    // | -3: unsorted functions                    |
+    // | -2: runtime.etext                         |
+    // | -1: injected functions(including startup) |
+
+    for (auto &I : BFs) {
+      auto BF = &I.second;
+      if (BF->hasRestoredNameRegex(GolangPass::getFirstBFName())) {
+        BF->setIndex(GO_FIRST_BF_INDEX);
+      } else if (BF->hasRestoredNameRegex(GolangPass::getLastBFName())) {
+        BF->setIndex(GO_LAST_BF_INDEX);
+      } else if (!BF->isGolang()) {
+        BF->setIndex(INVALID_BF_INDEX);
+      } else if (!BF->hasValidIndex()) {
+        BF->setIndex(GO_UNUSED_BF_INDEX);
+      }
+    }
+  }
 
   std::unique_ptr<std::ofstream> FuncsFile;
   if (!opts::GenerateFunctionOrderFile.empty()) {

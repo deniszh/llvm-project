@@ -648,5 +648,21 @@ void BinaryBasicBlock::updateOutputValues(const MCAsmLayout &Layout) {
   LocSyms.reset(nullptr);
 }
 
+bool BinaryBasicBlock::storeInstructionMetadata(BinaryBasicBlock::iterator II) {
+  // In case the instruction has locked annotation we will save all
+  // its annotations to noop instruction and store it in place of
+  // erased instruction
+  BinaryContext &BC = Function->getBinaryContext();
+  if (!BC.MIB->hasAnnotation(*II, "Locked"))
+    return false;
+
+  MCInst Noop;
+  BC.MIB->createNoop(Noop);
+  std::unique_lock<llvm::sys::RWMutex> Lock(BC.CtxMutex);
+  BC.MIB->copyAnnotationInst(*II, Noop);
+  Instructions[std::distance(Instructions.begin(), II)] = Noop;
+  return true;
+}
+
 } // namespace bolt
 } // namespace llvm

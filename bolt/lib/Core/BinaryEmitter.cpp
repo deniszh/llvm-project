@@ -434,9 +434,10 @@ void BinaryEmitter::emitFunctionBody(BinaryFunction &BF, FunctionFragment &FF,
     }
 
     // Check if special alignment for macro-fusion is needed.
-    bool MayNeedMacroFusionAlignment =
-        (opts::AlignMacroOpFusion == MFT_ALL) ||
-        (opts::AlignMacroOpFusion == MFT_HOT && BB->getKnownExecutionCount());
+    bool MayNeedMacroFusionAlignment = ((opts::AlignMacroOpFusion == MFT_ALL) ||
+                                        (opts::AlignMacroOpFusion == MFT_HOT &&
+                                         BB->getKnownExecutionCount())) &&
+                                       opts::GolangPass == opts::GV_NONE;
     BinaryBasicBlock::const_iterator MacroFusionPair;
     if (MayNeedMacroFusionAlignment) {
       MacroFusionPair = BB->getMacroOpFusionPair();

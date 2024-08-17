@@ -287,8 +287,7 @@ public:
                 const MCRegisterInfo *RegInfo)
       : Analysis(Analysis), Info(Info), RegInfo(RegInfo) {
     // Initialize the default annotation allocator with id 0
-    AnnotationAllocators.emplace(0, AnnotationAllocator());
-    MaxAllocatorId++;
+    AnnotationAllocators.emplace(MaxAllocatorId++, AnnotationAllocator());
     // Build alias map
     initAliases();
   }
@@ -917,6 +916,12 @@ public:
     llvm_unreachable("not implemented");
   }
 
+  /// Get stack adjustment value
+  virtual int getStackAdjustment(const MCInst &Inst) const {
+    llvm_unreachable("not implemented");
+    return false;
+  }
+
   /// Identify stack adjustment instructions -- those that change the stack
   /// pointer by adding or subtracting an immediate.
   virtual bool isStackAdjustment(const MCInst &Inst) const {
@@ -1338,6 +1343,12 @@ public:
     return false;
   }
 
+  /// Replace instruction with relaxed version of it
+  virtual bool relaxInstruction(MCInst &Inst) const {
+    llvm_unreachable("not implemented");
+    return false;
+  }
+
   /// Lower a tail call instruction \p Inst if required by target.
   virtual bool lowerTailCall(MCInst &Inst) {
     llvm_unreachable("not implemented");
@@ -1694,6 +1705,59 @@ public:
     return Index;
   }
 
+  /// Copy annotations from one instruction to other
+  void copyAnnotationInst(const MCInst &From, MCInst &To,
+                          AllocatorIdTy AllocatorId = 0) {
+    const MCInst *AnnotationInst = getAnnotationInst(From);
+    if (!AnnotationInst)
+      return;
+
+    for (unsigned I = 0; I < AnnotationInst->getNumOperands(); ++I) {
+      const int64_t Imm = AnnotationInst->getOperand(I).getImm();
+      const unsigned Index = extractAnnotationIndex(Imm);
+      const int64_t Value = extractAnnotationValue(Imm);
+      setAnnotationOpValue(To, Index, Value, AllocatorId);
+    }
+  }
+
+  /// Comapre annotations stored in instructions and return true if equal.
+  /// If \p GenericOnly is true compare only generic annotations.
+  bool areAnnotationsEqual(const MCInst &InstA, const MCInst &InstB,
+                           bool GenericOnly = true) {
+    const MCInst *AnnotationInstA = getAnnotationInst(InstA);
+    const MCInst *AnnotationInstB = getAnnotationInst(InstB);
+    if (!!AnnotationInstA != !!AnnotationInstB)
+      return false;
+
+    if (!AnnotationInstA)
+      return true;
+
+    if (AnnotationInstA->getNumOperands() != AnnotationInstB->getNumOperands())
+      return false;
+
+    for (unsigned I = 0; I < AnnotationInstA->getNumOperands(); ++I) {
+      const int64_t ImmA = AnnotationInstA->getOperand(I).getImm();
+      const unsigned Index = extractAnnotationIndex(ImmA);
+      const int64_t ValueA = extractAnnotationValue(ImmA);
+      const auto ValueB = getAnnotationOpValue(InstB, Index);
+      if (!ValueB)
+        return false;
+
+      if (Index >= MCPlus::MCAnnotation::kGeneric) {
+        const auto *AnnotationA =
+            reinterpret_cast<const MCPlus::MCAnnotation *>(ValueA);
+        const auto *AnnotationB =
+            reinterpret_cast<const MCPlus::MCAnnotation *>(*ValueB);
+        if (!AnnotationA->equals(*AnnotationB))
+          return false;
+      } else if (!GenericOnly && ValueA != *ValueB) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
   /// Store an annotation value on an MCInst.  This assumes the annotation
   /// is not already present.
   template <typename ValueType>
@@ -1882,6 +1946,13 @@ public:
                                           MCContext *Ctx) {
     llvm_unreachable("not implemented");
     return InstructionListType();
+  }
+
+  virtual InstructionListType
+  createInstrumentFiniCall(MCSymbol *HandlerFuncAddr, MCContext *Ctx,
+                           bool IsTailCall) {
+    llvm_unreachable("not implemented");
+    return std::vector<MCInst>();
   }
 
   virtual InstructionListType createNumCountersGetter(MCContext *Ctx) const {

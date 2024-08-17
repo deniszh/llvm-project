@@ -19,6 +19,7 @@
 #include "bolt/Core/JumpTable.h"
 #include "bolt/Core/MCPlusBuilder.h"
 #include "bolt/RuntimeLibs/RuntimeLibrary.h"
+#include "bolt/Utils/NameResolver.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/Triple.h"
@@ -472,6 +473,20 @@ public:
     return BinaryFunctions;
   }
 
+  /// Return BF by name. If the global function was not found return the first
+  /// found local
+  BinaryFunction *getBinaryFunctionByName(StringRef Name) {
+    BinaryData *Data = getFirstBinaryDataByName(Name);
+    if (!Data)
+      return nullptr;
+
+    return getBinaryFunctionAtAddress(Data->getAddress());
+  }
+
+  const BinaryFunction *getBinaryFunctionByName(StringRef Name) const {
+    return const_cast<BinaryContext *>(this)->getBinaryFunctionByName(Name);
+  }
+
   /// Create BOLT-injected function
   BinaryFunction *createInjectedBinaryFunction(const std::string &Name,
                                                bool IsSimple = true);
@@ -858,6 +873,19 @@ public:
     return nullptr;
   }
 
+  /// Return BinaryData for the given \p Name
+  /// If the data was not found return first local BinaryData or nullptr
+  BinaryData *getFirstBinaryDataByName(StringRef Name) {
+    BinaryData *Data = getBinaryDataByName(Name);
+    if (!Data)
+      return getBinaryDataByName(NameResolver::uniquifyID(Name, 1));
+    return Data;
+  }
+
+  const BinaryData *getFirstBinaryDataByName(StringRef Name) const {
+    return const_cast<BinaryContext *>(this)->getFirstBinaryDataByName(Name);
+  }
+
   /// Return true if \p SymbolName was generated internally and was not present
   /// in the input binary.
   bool isInternalSymbolName(const StringRef Name) {
@@ -1208,6 +1236,9 @@ public:
   uint64_t
   computeInstructionSize(const MCInst &Inst,
                          const MCCodeEmitter *Emitter = nullptr) const {
+    if (isAArch64())
+      return 4;
+
     if (auto Size = MIB->getAnnotationWithDefault<uint32_t>(Inst, "Size"))
       return Size;
 
@@ -1335,6 +1366,10 @@ public:
         /* DWARFMustBeAtTheEnd */ false));
     return Streamer;
   }
+
+  /// Returns std pair of binary functons desired and maximum alignment bytes
+  std::pair<unsigned, unsigned> getBFAlignment(BinaryFunction &Function,
+                                               bool EmitColdPart) const;
 };
 
 template <typename T, typename = std::enable_if_t<sizeof(T) == 1>>

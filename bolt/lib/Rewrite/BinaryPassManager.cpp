@@ -14,6 +14,7 @@
 #include "bolt/Passes/CMOVConversion.h"
 #include "bolt/Passes/FixRelaxationPass.h"
 #include "bolt/Passes/FrameOptimizer.h"
+#include "bolt/Passes/Golang.h"
 #include "bolt/Passes/Hugify.h"
 #include "bolt/Passes/IdenticalCodeFolding.h"
 #include "bolt/Passes/IndirectCallPromotion.h"
@@ -222,10 +223,10 @@ SpecializeMemcpy1("memcpy1-spec",
 static cl::opt<bool> Stoke("stoke", cl::desc("turn on the stoke analysis"),
                            cl::cat(BoltOptCategory));
 
-static cl::opt<bool> StringOps(
+cl::opt<bool> StringOps(
     "inline-memcpy",
     cl::desc("inline memcpy using 'rep movsb' instruction (X86-only)"),
-    cl::cat(BoltOptCategory));
+    cl::init(false), cl::ZeroOrMore, cl::cat(BoltOptCategory));
 
 static cl::opt<bool> StripRepRet(
     "strip-rep-ret",
@@ -245,6 +246,11 @@ static cl::opt<bool> CMOVConversionFlag("cmov-conversion",
                                         cl::desc("fold jcc+mov into cmov"),
                                         cl::ReallyHidden,
                                         cl::cat(BoltOptCategory));
+
+cl::opt<bool> InstructionsLowering("lower-instructions",
+                                   cl::desc("Instructions lowering pass"),
+                                   cl::init(true), cl::ZeroOrMore, cl::Hidden,
+                                   cl::cat(BoltCategory));
 
 } // namespace opts
 
@@ -336,6 +342,9 @@ void BinaryFunctionPassManager::runAllPasses(BinaryContext &BC) {
 
   if (opts::PrintProfileStats)
     Manager.registerPass(std::make_unique<PrintProfileStats>(NeverPrint));
+
+  if (opts::GolangPass != opts::GV_NONE)
+    Manager.registerPass(std::make_unique<GolangPrePass>(BC));
 
   Manager.registerPass(std::make_unique<ValidateInternalCalls>(NeverPrint));
 
@@ -444,9 +453,13 @@ void BinaryFunctionPassManager::runAllPasses(BinaryContext &BC) {
   // memory profiling data.
   Manager.registerPass(std::make_unique<ReorderData>());
 
-  if (BC.isAArch64()) {
+  if (BC.isAArch64())
     Manager.registerPass(std::make_unique<ADRRelaxationPass>());
 
+  if (opts::GolangPass != opts::GV_NONE)
+    Manager.registerPass(std::make_unique<GolangPostPass>(BC));
+
+  if (BC.isAArch64() || opts::GolangPass != opts::GV_NONE) {
     // Tighten branches according to offset differences between branch and
     // targets. No extra instructions after this pass, otherwise we may have
     // relocations out of range and crash during linking.
@@ -478,13 +491,17 @@ void BinaryFunctionPassManager::runAllPasses(BinaryContext &BC) {
   // function reordering. It's unsafe to use any CFG or instruction analysis
   // after this point.
   Manager.registerPass(
-      std::make_unique<InstructionLowering>(PrintAfterLowering));
+      std::make_unique<InstructionLowering>(PrintAfterLowering),
+      opts::InstructionsLowering);
 
   // In non-relocation mode, mark functions that do not fit into their original
   // space as non-simple if we have to (e.g. for correct debug info update).
   // NOTE: this pass depends on finalized code.
   if (!BC.HasRelocations)
     Manager.registerPass(std::make_unique<CheckLargeFunctions>(NeverPrint));
+
+  if (opts::GolangPass != opts::GV_NONE)
+    Manager.registerPass(std::make_unique<GolangPass>(BC));
 
   Manager.registerPass(std::make_unique<LowerAnnotations>(NeverPrint));
 
