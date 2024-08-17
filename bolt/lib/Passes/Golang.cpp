@@ -1039,6 +1039,7 @@ int GolangPass::unsafePointPass(BinaryFunction *BF, GoFunc *GoFunc) {
 }
 
 int GolangPass::pclntabPass(BinaryContext &BC) {
+  // yota9: The mmap is used since at this point we are unable to tell the final section size, we are allocating 8 times more of original space, which is more than enough. Since mmap allocates pages lazily we don't have extra memory consumption. However we probalbe should use ordinary new here
   int Ret;
   const uint64_t PclntabAddr = getPcHeaderAddr();
   if (!PclntabAddr) {

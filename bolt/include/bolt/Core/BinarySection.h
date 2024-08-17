@@ -441,6 +441,7 @@ public:
     return reinterpret_cast<const uint8_t *>(getOutputContents().data());
   }
   StringRef getOutputContents() const { return OutputContents; }
+  // yota9: The mechanism of in-place data section change should be re-implemented, your suggestions are welcomed :)
   uint64_t getAllocAddress() const {
     return reinterpret_cast<uint64_t>(getOutputData());
   }

@@ -1223,6 +1223,7 @@ void AssignSections::runOnFunctions(BinaryContext &BC) {
 
     if (!UseColdSection || Function.hasValidIndex())
       Function.setCodeSectionName(BC.getMainCodeSectionName());
+      // yota9: The problem here that if we set hot section based on the hasProfile insetad of hasValidIndex we will break LongJmp (tentativeLayoutRelocMode checks index), so we need to remove hasProfile case at all here (I will remove it with the next reupload). AFAIR the problem here is that if the function has profile but don't have exec count (which is not set if the main entry point does not have profile information for some reason) we would and up with split function with invalid index both parts of which will be emitted one by one in cold section. So we need to fix either function reordering alg to set hot index if the function has a profile (not exec count) or add check during profile read so that if the function hasPprofile() set exec count to be at least 1. Looking for your suggestions here too, probably I will separate this part from this commit to another one
     else
       Function.setCodeSectionName(BC.getColdCodeSectionName());
 

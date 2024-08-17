@@ -649,6 +649,7 @@ void BinaryBasicBlock::updateOutputValues(const MCAsmLayout &Layout) {
 }
 
 bool BinaryBasicBlock::storeInstructionMetadata(BinaryBasicBlock::iterator II) {
+  // yota9: We need this, since some of the instructions annotations might be "locked". E.g. when dealing with gc inlined functions, we might inline only one instruction (e.g NOP) which will be removed by bolt. But this instruction has inline metadata that we need to have in order to restore inlining golang tables. So before removing such instruction we need to create NOP instruction on it's place that will store this metadata.
   // In case the instruction has locked annotation we will save all
   // its annotations to noop instruction and store it in place of
   // erased instruction

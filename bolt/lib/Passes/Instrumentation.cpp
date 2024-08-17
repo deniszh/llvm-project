@@ -191,6 +191,7 @@ BinaryBasicBlock::iterator insertInstructions(InstructionListType &Instrs,
   BinaryContext &BC = BB.getFunction()->getBinaryContext();
   for (MCInst &NewInst : Instrs) {
     BC.MIB->getOrCreateAnnotationAs<bool>(NewInst, "IsInstrumentation") = true;
+    // yota9: The golang has a sp bias table for each function. Since instrumentation uses the stack we need to mark inserted instructions so later in golang-postprocess and golang pass we will handle these instructions specially
     Iter = BB.insertInstruction(Iter, NewInst);
     ++Iter;
   }

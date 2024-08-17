@@ -1167,6 +1167,7 @@ void BinaryEmitter::emitDataSections(StringRef OrgSecPrefix) {
   }
 }
 
+// yota9: The extra sections creation and emission mechanism should be re-implemented, your suggestions are welcomed :)
 namespace llvm {
 namespace bolt {
 
