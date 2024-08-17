@@ -115,6 +115,9 @@ struct Relocation {
   /// Return code for ABS relocation based on size
   static uint64_t getAbs(uint8_t Size);
 
+  /// Return code for a RELATIVE relocation
+  static uint64_t getRelative();
+
   /// Return true if this relocation is PC-relative. Return false otherwise.
   bool isPCRelative() const { return isPCRelative(Type); }
 
