@@ -254,19 +254,19 @@ examples:
 
 * x86_64 (pie): 
 ```
-go build -a -buildmode=pie -ldflags='-linkmode=external -extld=gcc -extldflags "-fuse-ld=gold -fPIE -pie -Wl,--threads -Wl,--emit-relocs -Wl,--compress-debug-sections=none
+go build -a -buildmode=pie -ldflags='-linkmode=external -extld=gcc -extldflags "-fuse-ld=gold -fPIE -pie -Wl,--threads -Wl,--emit-relocs -Wl,--compress-debug-sections=none"
 ```
 
 * x86_64 (no-pie):
 
 ```
-go build -a -buildmode=exe -ldflags='-linkmode=external -extld=gcc -extldflags "-fuse-ld=gold -no-pie -Wl,--threads -Wl,--emit-relocs -Wl,--compress-debug-sections=none
+go build -a -buildmode=exe -ldflags='-linkmode=external -extld=gcc -extldflags "-fuse-ld=gold -no-pie -Wl,--threads -Wl,--emit-relocs -Wl,--compress-debug-sections=none"
 ```
 
 * aarch64 (non-pie)
 
 ```
-go build -a -ldflags='-linkmode=external -extld=gcc -extldflags "-no-pie -Wl,--emit-relocs -Wl,--compress-debug-sections=none
+go build -a -ldflags='-linkmode=external -extld=gcc -extldflags "-no-pie -Wl,--emit-relocs -Wl,--compress-debug-sections=none"
 ```
 
 NOTE: The aarch64 ld and gold linkers currently has some bugs related to PIE binaries. The ld emits wrong addresses in data sections, which does not affect runtime due to dynamic relocations, but affects our binary data extractions. The gold linker emits static relocations on the wrong offsets.
